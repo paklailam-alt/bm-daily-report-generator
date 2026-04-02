@@ -54,12 +54,16 @@ class AircraftReport:
         s = self.status.lower()
         if "on schedule" in s:
             return "green"
-        if "potential delay" in s:
+        if "potential delay" in s or "potenial delay" in s:
             return "amber"
-        if s == "delay":
+        if s == "delay" or ("delay" in s and "potential" not in s and "potenial" not in s):
             return "red"
         return "unknown"
 
+
+# ---------------------------------------------------------------------------
+# Text helpers
+# ---------------------------------------------------------------------------
 
 def _clean_line(line: str) -> str:
     line = line.replace("\u2022", "-").replace("\u25cf", "-").strip()
@@ -78,196 +82,219 @@ def _extract_first(patterns: Iterable[str], text: str, default: str = "-") -> st
     return default
 
 
-def _extract_block(start_re: str, end_res: list[str], text: str) -> list[str]:
-    start = re.search(start_re, text, re.IGNORECASE)
-    if not start:
-        return []
-    sub = text[start.end() :]
-    end_pos = len(sub)
-    for end_re in end_res:
-        m = re.search(end_re, sub, re.IGNORECASE)
-        if m:
-            end_pos = min(end_pos, m.start())
-    lines = _non_empty_lines(sub[:end_pos])
-    return [re.sub(r"^[-:]\s*", "", line) for line in lines if line]
-
-
 def _normalize_header(line: str) -> str:
     line = line.lower()
     line = re.sub(r"[^a-z0-9/ ]+", " ", line)
     return re.sub(r"\s+", " ", line).strip()
 
 
-def _line_matches_any_header(line: str, candidates: list[str]) -> bool:
-    n = _normalize_header(line)
-    return any(c in n for c in candidates)
-
-
-def _extract_section_from_lines(lines: list[str], start_headers: list[str], stop_headers: list[str]) -> list[str]:
-    start_idx = -1
-    for i, line in enumerate(lines):
-        if _line_matches_any_header(line, start_headers):
-            start_idx = i + 1
-            break
-    if start_idx < 0:
-        return []
-
-    out: list[str] = []
-    for j in range(start_idx, len(lines)):
-        line = _clean_line(lines[j])
-        if not line:
-            continue
-        if _line_matches_any_header(line, stop_headers):
-            break
-        if len(line) < 2:
-            continue
-        # Drop repeated section-heading noise if OCR is messy.
-        if _line_matches_any_header(line, start_headers):
-            continue
-        out.append(re.sub(r"^[-:]\s*", "", line))
-    return out
-
-
 def _compact_lines(items: list[str], max_items: int = 20) -> list[str]:
     cleaned: list[str] = []
-    seen = set()
+    seen: set[str] = set()
     for item in items:
         x = _clean_line(item)
-        if not x:
+        if not x or len(x) < 3:
             continue
-        if x.lower() in seen:
+        key = x.lower()
+        if key in seen:
             continue
-        seen.add(x.lower())
+        seen.add(key)
         cleaned.append(x)
         if len(cleaned) >= max_items:
             break
     return cleaned
 
 
+# ---------------------------------------------------------------------------
+# Noise / keyword constants
+# ---------------------------------------------------------------------------
+
 NOISE_PATTERNS = [
     r"^a/c overall",
-    r"^status$",
+    r"^status\b",
     r"^on schedule$",
     r"^potential delay$",
+    r"^potenial delay$",
     r"^delay$",
-    r"^milestone initial plan",
+    r"^milestone",
     r"^card figures",
     r"^manpower by trade",
-    r"^critical shortage$",
-    r"^raise date$",
-    r"^keyword holding up areas$",
-    r"^cab$",
-    r"^insp",
-    r"^maint",
-    r"^aim$",
-    r"^av$",
-    r"^sm$",
-    r"^af[: ]",
-    r"^im[: ]",
+    r"^total mr",
+    r"^total manpower",
+    r"^last night shift",
+    r"^n shift support",
+    r"^critical shortage",
+    r"^raise date",
+    r"^keyword holding",
+    r"^holding up areas",
+    r"^provide details",
+    r"^occurr?ence reporting",
+    r"^safety issue",
+    r"^quality and safety",
+    r"^air con connected",
+    r"^yesterday mhr",
+    r"^arrival fob",
+    r"^check controller",
+    r"^planning in.charge",
+    r"^aging airplane",
+    r"^fuel tank panels open up$",
+    r"^cancel.*completed",
+    r"^completed\s*total",
+    r"^completed$",
+    r"^days? of",
+    r"^days?\s*\d",
+    r"^days? rtc",
+    r"^aircraft arrival",
+    r"^critical material",
+    r"^critical tar",
+    r"^tools p/n",
+    r"^general material shortage",
+    r"^cabin shortage",
+    r"^risk item",
+    r"^left blank",
+    r"^d\.d\.d",
+    r"^handler$",
+    r"^mc remark",
+    r"^prod remark",
+    r"^ts reply",
+    r"^tar description",
+    r"^tar status",
+    r"^tar #",
+    r"^total raised",
+    r"^outstanding\b",
+    r"^# risk\b",
+    r"^risk$",
+    r"^report date",
+    r"^bm daily aircraft",
+    r"^wp no",
+    r"^a/c regn",
+    r"^customer\s",
+    r"^chk type",
+    r"^check type",
+    r"^schedule$",
+    r"^-- \d+ of \d+ --$",
+    r"^\d+$",
+    r"^[a-z]$",
+    r"^yes$",
+    r"^no$",
+    r"^n/a",
+    r"^a/r$",
+    r"^remark\b",
+    r"^eta\b",
+    r"^ets\b",
+    r"^ata\b",
+    r"^ats\b",
+    r"^trt$",
     r"^rtc$",
-    r"^eta[: ]",
-    r"^ets[: ]",
-    r"^dayata",
+    r"^fob\b",
+    r"^defuel\b",
+    r"^refuel\b",
+    r"^p33\b",
+    r"^risk\s+qty",
+    r"^etd\b",
+    r"^esd\b",
+    r"^d\s*d\s*d",
+    r"^p33 mod",
+    r"^log \d+",
+    r"^inspection target",
+    r"^maintenance start",
+    r"^power (on|off)",
+    r"^roll (in|out)",
+    r"^engine (idle|high|run)",
+    r"^ldg retraction",
+    r"^weighing",
+    r"^aircraft exterior",
+    r"^compass swing",
+    r"^air test",
+    r"^a/c weighing",
+    r"^technical details",
+    r"^progress highlights",
+    r"^critical task",
+    r"^zone critical",
+    r"^initial plan",
+    r"^latest plan",
+    r"^actual date",
+    r"^tia completion",
+    r"^departure\b",
+    r"^check completion",
+    r"^1c check$",
+    r"^b check$",
+    r"^overall initial",
+    r"^shortage$",
+    r"^qtypart",
+    r"^qty\s+part",
+    r"^keyword\s+holding",
+    r"^raise date\s+qty",
+    r"^\d{1,2}\-[a-z]{3}\-\d{2}\s+\w+\s+\d",
+    r"^risk tar",
+    r"^\d+\s+etc\b",
+    r"^\d+\s+rtc\b",
+    r"^open$",
+    r"^defer$",
+    r"^cr\s",
+    r"^wo\s",
+    r"^swo\s",
+    r"^total\s+\d",
 ]
 
 ISSUE_KEYWORDS = [
-    "crack",
-    "aog",
-    "pending",
-    "waiting",
-    "fault",
-    "leak",
-    "corrosion",
-    "damage",
-    "shortage",
-    "tar",
-    "blocked",
-    "repair",
-    "rectification",
-    "fail",
+    "crack", "aog", "pending", "waiting", "fault", "leak", "corrosion",
+    "damage", "shortage", "tar", "blocked", "repair", "fail", "broken",
+    "torn", "erosi", "delamina", "ingress", "defect", "hold up", "held up",
+    "robbed", "missing", "interference",
 ]
 
 PROGRESS_KEYWORDS = [
-    "completed",
-    "installation",
-    "close up",
-    "build up",
-    "inspection",
-    "restoration",
-    "replacement",
-    "application",
-    "check",
-    "open up",
-    "wip",
+    "completed", "installation", "install", "close up", "build up",
+    "inspection", "restoration", "replacement", "application", "check",
+    "open up", "wip", "done", "restore", "remove", "removal",
+    "rectification", "modification", "mod", "lubrication", "servicing",
+    "cleaning", "painting", "pre-hangar", "pre hangar", "pre flight",
+    "defuel", "refuel", "engine run",
 ]
+
+ZONE_NAMES = frozenset({
+    "cab", "cabin", "fus / cgo", "fus/cgo", "fuselage",
+    "eng / apu", "eng/apu", "engine",
+    "wing", "emp", "hyd / ldg", "hyd/ldg",
+    "hyd / ldg emp", "hyd / ldg & emp",
+    "aim", "av", "fx", "cgo", "sm", "access",
+    "im", "eim", "sc",
+    "ldg", "fus", "emp lh",
+})
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------------------------
+
+def _is_valid_regn(value: str) -> bool:
+    v = value.strip().upper()
+    if not v or len(v) < 3 or v in {"UNKNOWN", "BAY", "NOSE"}:
+        return False
+    if re.search(r"[0-9]", v) and len(v) >= 3:
+        return True
+    if "-" in v and len(v) >= 4:
+        return True
+    return bool(re.match(r"^[A-Z]{4,6}$", v)) and not v.startswith(("CAB", "RTC", "ATA"))
 
 
 def _is_noise_line(line: str) -> bool:
     t = _normalize_header(line)
     if len(t) <= 2:
         return True
-    if re.fullmatch(r"[0-9 ./%:()-]+", t):
+    if re.fullmatch(r"[0-9 ./%:,\-()]+", t):
+        return True
+    alnum = sum(ch.isalnum() for ch in t)
+    if alnum and (sum(ch.isdigit() for ch in t) / max(alnum, 1)) > 0.6:
+        return True
+    # "A/C OVERALL" appearing anywhere (header label, never real content)
+    if "a/c overall" in t:
         return True
     for pat in NOISE_PATTERNS:
         if re.search(pat, t):
             return True
     return False
-
-
-def _extract_status(raw: str, lines: list[str]) -> str:
-    # Priority: explicit overall status lines.
-    for line in lines:
-        n = _normalize_header(line)
-        if "overall status" in n:
-            if "potential delay" in n:
-                return STATUS_AMBER
-            if re.search(r"\bdelay\b", n):
-                return STATUS_RED
-            if "on schedule" in n:
-                return STATUS_GREEN
-    # Fallback from full text.
-    status = _extract_first(
-        [r"A/C\s*Overall\s*Status[:\s]+([A-Za-z ]+)", r"Overall\s*Status[:\s]+([A-Za-z ]+)"],
-        raw,
-        "Unknown",
-    )
-    if "potential delay" in status.lower():
-        return STATUS_AMBER
-    if "on schedule" in status.lower():
-        return STATUS_GREEN
-    if re.search(r"\bdelay\b", status, re.IGNORECASE):
-        return STATUS_RED
-    return "Unknown"
-
-
-def _clean_section_lines(section_lines: list[str], kind: str, status: str) -> list[str]:
-    kept: list[str] = []
-    for line in section_lines:
-        s = _clean_line(line)
-        if _is_noise_line(s):
-            continue
-        low = s.lower()
-        if kind == "reason" and status == STATUS_GREEN:
-            # For on-schedule aircraft, drop boilerplate "reason" rows.
-            continue
-        if kind == "critical":
-            if not any(k in low for k in ISSUE_KEYWORDS) and len(s) < 18:
-                continue
-        if kind == "progress":
-            # Keep lines that look like activity/progress or are sufficiently descriptive.
-            if not any(k in low for k in PROGRESS_KEYWORDS) and len(s) < 20:
-                continue
-        kept.append(s)
-    # De-duplicate while keeping order.
-    deduped: list[str] = []
-    seen = set()
-    for x in kept:
-        key = x.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(x)
-    return deduped
 
 
 def _guess_regn_from_filename(file_name: str) -> str:
@@ -277,15 +304,380 @@ def _guess_regn_from_filename(file_name: str) -> str:
     return token.upper() if token else "UNKNOWN"
 
 
-def _load_config() -> dict:
-    path = Path(__file__).with_name("ui_output_config.json")
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return DEFAULT_CONFIG
-    return DEFAULT_CONFIG
+# ---------------------------------------------------------------------------
+# Field extraction helpers
+# ---------------------------------------------------------------------------
 
+def _extract_bay(raw: str, lines: list[str]) -> str:
+    """Extract bay from all known formats."""
+    # HAECO standard: "Bay : BAY 4", "Bay : BAY E", "Bay : BAY H"
+    m = re.search(r"Bay\s*:\s*BAY\s+([A-Z0-9]+)", raw, re.IGNORECASE)
+    if m:
+        val = m.group(1).strip().upper()
+        if val not in {"PLANNING", "IN", "CHARGE", "BAY"}:
+            return val
+
+    # HAECO: "Bay : M23" (no BAY prefix)
+    m = re.search(r"Bay\s*:\s*(M\d+)", raw, re.IGNORECASE)
+    if m:
+        return m.group(1).strip().upper()
+
+    # UA scrambled format: bay value is on a separate line near "Bay :"
+    for i, line in enumerate(lines):
+        cl = _clean_line(line)
+        if re.match(r"Bay\s*:\s*$", cl, re.IGNORECASE):
+            # Value is on a line 1-4 positions before "Bay :"
+            for j in range(max(0, i - 4), i):
+                prev = _clean_line(lines[j])
+                # Single letter (A, B, E, etc.)
+                if re.fullmatch(r"[A-Z]", prev, re.IGNORECASE):
+                    return prev.upper()
+                # Number like "5" or "6"
+                if re.fullmatch(r"\d{1,2}", prev):
+                    return prev
+                # Alphanumeric like "L412"
+                if re.fullmatch(r"[A-Z]\d{1,4}", prev, re.IGNORECASE):
+                    return prev.upper()
+                # "A Chk Type :" or "AChk Type :" (bay letter merged with next column)
+                m2 = re.match(r"^([A-Z])\s*Chk\s*Type", prev, re.IGNORECASE)
+                if m2:
+                    return m2.group(1).upper()
+            break
+
+    # Body-text mention: "TOW AIRCRAFT TO M21"
+    m = re.search(r"TOW\s+(?:AIRCRAFT\s+)?TO\s+(M\d+|BAY\s*[A-Z0-9]+)", raw, re.IGNORECASE)
+    if m:
+        val = re.sub(r"^BAY\s*", "", m.group(1), flags=re.IGNORECASE).strip()
+        return val.upper()
+
+    return "-"
+
+
+def _extract_customer(raw: str) -> str:
+    """Extract customer name."""
+    # Standard: "Customer : Brussels Airlines A/C Type: A333"
+    m = re.search(
+        r"Customer\s*:\s*([A-Za-z][A-Za-z0-9 /&\-().,']{1,40}?)\s*(?:A/C\s*Type|$)",
+        raw, re.IGNORECASE | re.MULTILINE,
+    )
+    if m:
+        val = m.group(1).strip()
+        bad = {"dayata", "fuel", "aircraft arrival", "day", "ata", "trt"}
+        if val and val.lower() not in bad and not any(x in val.lower() for x in bad):
+            return val
+
+    # UA/AA format: infer from carrier code before "A/C Type"
+    # Handle both ": UA A/C Type" and ":UA A/C Type" (no space after colon)
+    m = re.search(r"(?:^|[\s:])([A-Z]{2,4})\s+A/C\s*Type", raw, re.IGNORECASE | re.MULTILINE)
+    if m:
+        code = m.group(1).upper()
+        code_map = {
+            "UA": "United Airlines", "AA": "American Airlines",
+            "AC": "Air Canada", "CX": "Cathay Pacific",
+            "QF": "Qantas", "AY": "Finnair", "SN": "Brussels Airlines",
+            "5Y": "Atlas Air",
+        }
+        if code in code_map:
+            return code_map[code]
+
+    return "-"
+
+
+def _extract_status(raw: str, lines: list[str]) -> str:
+    # Priority 1: "A/C OVERALL STATUS <value>" pattern
+    m = re.search(r"A/C\s*OVERALL\s*STATUS\s+(.+)", raw, re.IGNORECASE)
+    if m:
+        val = m.group(1).strip().lower()
+        if "potential delay" in val or "potenial delay" in val:
+            return STATUS_AMBER
+        if "on schedule" in val:
+            return STATUS_GREEN
+        if "delay" in val:
+            return STATUS_RED
+
+    # Priority 2: "STATUS" line followed by value on same or next line
+    for i, line in enumerate(lines):
+        n = _normalize_header(line)
+        if n == "status" or "overall" in n and "status" in n:
+            combined = n
+            if i + 1 < len(lines):
+                combined += " " + _normalize_header(lines[i + 1])
+            if "potential delay" in combined or "potenial delay" in combined:
+                return STATUS_AMBER
+            if "on schedule" in combined:
+                return STATUS_GREEN
+            if re.search(r"\bdelay\b", combined):
+                return STATUS_RED
+
+    # Priority 3: look for standalone status lines near top of document
+    for line in lines[:60]:
+        n = _normalize_header(line)
+        if n == "potential delay" or n == "potenial delay":
+            return STATUS_AMBER
+        if n == "on schedule":
+            return STATUS_GREEN
+
+    # Priority 4: broad text scan
+    joined = " ".join(_normalize_header(x) for x in lines[:120])
+    if "potential delay" in joined or "potenial delay" in joined:
+        return STATUS_AMBER
+    if re.search(r"\bdelay\b", joined) and "potential" not in joined:
+        return STATUS_RED
+    if "on schedule" in joined:
+        return STATUS_GREEN
+
+    return "Unknown"
+
+
+def _extract_check_type(raw: str) -> str:
+    """Extract check type, stopping before Bay or Planning fields."""
+    m = re.search(
+        r"(?:Chk|Check)\s*Type\s*:\s*(.+?)(?:\s+Bay\s*:|\s+Planning|\s*$)",
+        raw, re.IGNORECASE | re.MULTILINE,
+    )
+    if m:
+        val = m.group(1).strip()
+        val = re.sub(r"\s+", " ", val)
+        if len(val) > 2:
+            return val
+    return "-"
+
+
+def _extract_etc(raw: str) -> str:
+    m = re.search(r"\bETC\s+(\d{1,2}[\s\-/][A-Za-z]{3}[\s\-/]\d{2,4}(?:\s+\d{2}:\d{2})?)", raw)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"\bETC\s+(\d{2}\-[A-Za-z]{3}\-\d{2}\s+\d{2}:\d{2})", raw)
+    if m:
+        return m.group(1).strip()
+    return "-"
+
+
+def _extract_etd(raw: str) -> str:
+    m = re.search(r"\bETD\s+(\d{1,2}[\s\-/][A-Za-z]{3}[\s\-/]\d{2,4}(?:\s+\d{2}:\d{2})?)", raw)
+    if m:
+        return m.group(1).strip()
+    return "-"
+
+
+# ---------------------------------------------------------------------------
+# Section extraction
+# ---------------------------------------------------------------------------
+
+def _extract_reason_section(lines: list[str], status: str) -> list[str]:
+    """Extract Reason lines (between 'Reason:' and 'Milestone'/'Card Figures')."""
+    start = -1
+    for i, line in enumerate(lines):
+        if re.match(r"Reason\s*:", line, re.IGNORECASE):
+            start = i + 1
+            break
+    if start < 0:
+        return []
+
+    # Noise patterns specific to reason blocks (manpower, personnel, schedule data)
+    reason_noise = re.compile(
+        r"(^af\s*\d.*(?:im|av|sm)\s*\d"  # manpower: "AF: 16 IM: 10 AV: 4"
+        r"|^total\s*(mr|manpower)"
+        r"|^last night|^n shift"
+        r"|dayata"
+        r"|^\d{2}\-[a-z]{3}\-\d{2}"
+        r"|^etc\b|^etd\b"
+        r"|^days of|^days rtc"
+        r"|^1c\s|^b\s*chk|^chk type"
+        r"|^\w{1,3}\s+\w{2,10}\s+\d{5,7})",  # personnel: "SL LAM 291766" (normalized)
+        re.IGNORECASE,
+    )
+
+    out: list[str] = []
+    for j in range(start, min(start + 15, len(lines))):
+        line = _clean_line(lines[j])
+        n = _normalize_header(line)
+        if "milestone" in n or "card figures" in n or "technical details" in n:
+            break
+        if _is_noise_line(line):
+            continue
+        if reason_noise.search(n):
+            continue
+        if status == STATUS_GREEN and len(line) < 15:
+            continue
+        cleaned = re.sub(r"^[-•]\s*", "", line)
+        if cleaned and len(cleaned) >= 8:
+            out.append(cleaned)
+    return out
+
+
+def _has_zone_table(lines: list[str]) -> bool:
+    """True if the PDF uses a HAECO-style zone table with all headers on one line."""
+    for line in lines:
+        n = _normalize_header(line)
+        if "zone" in n and "critical task" in n and "progress" in n:
+            return True
+        if "zone" in n and "critical task" in n:
+            return True
+    return False
+
+
+def _extract_from_zone_table(lines: list[str], overall_status: str) -> tuple[list[str], list[str]]:
+    """Parse the HAECO zone table into critical issues and progress highlights."""
+    # Prefer "Zone Critical Task" line; fall back to "Technical Details"
+    start = -1
+    for i, line in enumerate(lines):
+        n = _normalize_header(line)
+        if "zone" in n and "critical task" in n:
+            start = i + 1
+            break
+    if start < 0:
+        for i, line in enumerate(lines):
+            n = _normalize_header(line)
+            if n == "technical details":
+                start = i + 1
+                break
+    if start < 0:
+        return [], []
+
+    zone_status = overall_status
+    items: list[tuple[str, str]] = []
+
+    for j in range(start, len(lines)):
+        line = _clean_line(lines[j])
+        n = _normalize_header(line)
+
+        if "critical material" in n or "critical tar" in n or "critical shortage" in n:
+            break
+        if re.match(r"^-- \d+ of \d+ --$", line):
+            continue
+        # Skip zone table header if encountered again (multi-page)
+        if "zone" in n and ("critical task" in n or "progress highlight" in n):
+            continue
+        if n == "technical details":
+            continue
+
+        # Track per-zone status
+        if n in {"on schedule"}:
+            zone_status = STATUS_GREEN
+            continue
+        if n in {"potential delay", "potenial delay"}:
+            zone_status = STATUS_AMBER
+            continue
+        if n == "delay":
+            zone_status = STATUS_RED
+            continue
+
+        # Skip zone names, sub-headers, INSP/MAINT lines, milestone data
+        if _is_section_noise(line, n):
+            continue
+        if _is_noise_line(line):
+            continue
+        if len(line) < 5:
+            continue
+
+        cleaned = re.sub(r"^[-•]\s*", "", line)
+        if cleaned and len(cleaned) >= 4:
+            items.append((cleaned, zone_status))
+
+    # Classify items into critical vs progress
+    critical: list[str] = []
+    progress: list[str] = []
+
+    for item, zs in items:
+        low = item.lower()
+        is_issue = any(k in low for k in ISSUE_KEYWORDS)
+        is_prog = any(k in low for k in PROGRESS_KEYWORDS)
+
+        if is_issue and not is_prog:
+            critical.append(item)
+        elif is_prog and not is_issue:
+            progress.append(item)
+        elif is_issue and is_prog:
+            if zs in {STATUS_AMBER, STATUS_RED}:
+                critical.append(item)
+            else:
+                progress.append(item)
+        else:
+            # No keyword match: use zone status and length heuristic
+            if zs in {STATUS_AMBER, STATUS_RED} and len(item) >= 15:
+                critical.append(item)
+            elif len(item) >= 8:
+                progress.append(item)
+
+    return critical, progress
+
+
+def _is_section_noise(line: str, n: str) -> bool:
+    """Check if a line is noise within critical/progress sections."""
+    if n in ZONE_NAMES:
+        return True
+    if re.match(r"^(insp|maint|initial)", n):
+        return True
+    if n in {"on schedule", "potential delay", "delay", "potenial delay"}:
+        return True
+    # Date-heavy lines from milestone tables (normalized: dashes removed)
+    if re.match(r"^\d{1,2}\s+[a-z]{3}\s+\d{2,4}", n):
+        return True
+    # Shortage table references (date + part/keyword)
+    if re.match(r"^\d{1,2}\s*[a-z]{3}\s*\d{2}\s+\w+", n):
+        return True
+    # Manpower summary: "AF : 0 IM : 0 SM: 0 AV :0"
+    if re.search(r"af\s*\d.*(?:im|av|sm)\s*\d", n):
+        return True
+    # Shortage/material tracking lines with "//" notation
+    if "//" in line and re.search(r"(?:tar|po|awb|esd|eta|req|sr|pn|mf)\b", line.lower()):
+        return True
+    if "//" in line and re.search(r"\d{4,}", line):
+        return True
+    return False
+
+
+def _extract_ua_sections(lines: list[str]) -> tuple[list[str], list[str]]:
+    """Extract critical/progress from UA/AA-format PDFs with separate headers."""
+    crit_start = -1
+    prog_start = -1
+    crit_end = len(lines)
+
+    for i, line in enumerate(lines):
+        n = _normalize_header(line)
+        if ("critical task" in n) and "zone" not in n:
+            crit_start = i + 1
+        if ("progress highlights" in n or "progress highlight" in n) and "zone" not in n:
+            prog_start = i + 1
+            if crit_start >= 0 and crit_end == len(lines):
+                crit_end = i
+
+    critical: list[str] = []
+    progress: list[str] = []
+
+    if crit_start >= 0:
+        for j in range(crit_start, min(crit_end, len(lines))):
+            line = _clean_line(lines[j])
+            if _is_noise_line(line):
+                continue
+            n = _normalize_header(line)
+            if _is_section_noise(line, n):
+                continue
+            cleaned = re.sub(r"^[-•]\s*", "", line)
+            if cleaned and len(cleaned) >= 8:
+                critical.append(cleaned)
+
+    if prog_start >= 0:
+        for j in range(prog_start, len(lines)):
+            line = _clean_line(lines[j])
+            n = _normalize_header(line)
+            if "critical material" in n or "critical tar" in n or "critical shortage" in n:
+                break
+            if _is_noise_line(line):
+                continue
+            if _is_section_noise(line, n):
+                continue
+            cleaned = re.sub(r"^[-•]\s*", "", line)
+            if cleaned and len(cleaned) >= 8:
+                progress.append(cleaned)
+
+    return critical, progress
+
+
+# ---------------------------------------------------------------------------
+# Main PDF parser
+# ---------------------------------------------------------------------------
 
 def parse_pdf_file(file_name: str, file_bytes: bytes, high_fidelity: bool = True) -> AircraftReport:
     reader = PdfReader(io.BytesIO(file_bytes))
@@ -293,82 +685,162 @@ def parse_pdf_file(file_name: str, file_bytes: bytes, high_fidelity: bool = True
     lines = _non_empty_lines(text)
     raw = "\n".join(lines)
 
-    regn = _extract_first(
+    # Registration - try standard pattern, then reversed pattern (N718ANA/C Regn)
+    regn_raw = _extract_first(
         [r"A/C\s*Regn[:\s]+([A-Z0-9\-]+)", r"Aircraft\s*Regn[:\s]+([A-Z0-9\-]+)"],
         raw,
-        _guess_regn_from_filename(file_name),
+        "",
     )
+    if not _is_valid_regn(regn_raw):
+        # Try reversed: regn merged before "A/C Regn" (e.g. "N718ANA/C Regn")
+        m = re.search(r"([A-Z0-9]{4,8})A/C\s*Regn", raw, re.IGNORECASE)
+        if m and _is_valid_regn(m.group(1)):
+            regn_raw = m.group(1)
+    regn = regn_raw if _is_valid_regn(regn_raw) else _guess_regn_from_filename(file_name)
+
+    # Bay
+    bay = _extract_bay(raw, lines)
+
+    # Status
     status = _extract_status(raw, lines)
 
-    reason_block = _extract_block(
-        r"Reason", [r"Critical Task", r"Progress Highlights", r"Work Done", r"RTC", r"Remarks"], raw
+    # Customer
+    customer = _extract_customer(raw)
+
+    # A/C Type
+    ac_type = _extract_first(
+        [r"A/C\s*Type[:\s]+([A-Za-z0-9\-]{2,12})", r"Type[:\s]+([A-Za-z0-9\-]{2,12})"],
+        raw,
     )
-    crit_block = _extract_block(
-        r"Critical\s*Task\s*/\s*Issue", [r"Progress Highlights", r"Work Done", r"RTC", r"Remarks"], raw
-    ) or _extract_block(r"Critical\s*Issue", [r"Progress", r"RTC", r"Remarks"], raw)
-    prog_block = _extract_block(r"Progress Highlights", [r"RTC", r"Remarks"], raw) or _extract_block(
-        r"Work Done", [r"RTC", r"Remarks"], raw
-    )
 
-    if high_fidelity:
-        hf_reason = _extract_section_from_lines(
-            lines,
-            ["reason for potential delay", "reason for delay", "reason"],
-            ["critical task / issue", "critical issue", "progress highlights", "work done", "rtc", "remarks"],
-        )
-        hf_crit = _extract_section_from_lines(
-            lines,
-            ["critical task / issue", "critical issue"],
-            ["progress highlights", "work done", "rtc", "remarks"],
-        )
-        hf_prog = _extract_section_from_lines(
-            lines,
-            ["progress highlights", "work done"],
-            ["rtc", "remarks", "incoming aircraft"],
-        )
-        if hf_reason:
-            reason_block = hf_reason
-        if hf_crit:
-            crit_block = hf_crit
-        if hf_prog:
-            prog_block = hf_prog
+    # Check type
+    check_type = _extract_check_type(raw)
 
-    reason_block = _clean_section_lines(reason_block, "reason", status)
-    crit_block = _clean_section_lines(crit_block, "critical", status)
-    prog_block = _clean_section_lines(prog_block, "progress", status)
+    # Dates
+    etc_val = _extract_etc(raw)
+    etd_val = _extract_etd(raw)
+    ata_val = _extract_first([r"\bATA[:\s]+(\d{1,2}[\s\-/][A-Za-z]{3}[\s\-/]\d{2,4}(?:\s+\d{2}:\d{2})?)"], raw)
+    day_val = _extract_first([r"\bDay\s+(\d+\s*(?:of\s*\d+)?)"], raw)
 
-    # If critical section is weak, salvage likely issue lines globally.
-    if high_fidelity and not crit_block:
-        salvage = [l for l in lines if any(k in l.lower() for k in ISSUE_KEYWORDS) and not _is_noise_line(l)]
+    # Reason
+    reason_block = _extract_reason_section(lines, status)
+    # Fallback: if no Reason section found, look for bullet points after status line
+    if not reason_block and status in {STATUS_AMBER, STATUS_RED}:
+        for i, line in enumerate(lines):
+            n = _normalize_header(line)
+            if "status" in n and ("delay" in n or "potential" in n or "potenial" in n):
+                for j in range(i + 1, min(i + 15, len(lines))):
+                    jl = _clean_line(lines[j])
+                    if re.match(r"Milestone", jl, re.IGNORECASE):
+                        break
+                    if jl.startswith("-") and len(jl) > 10:
+                        reason_block.append(re.sub(r"^-\s*", "", jl))
+                break
+
+    # Critical Task / Issue and Progress Highlights
+    if _has_zone_table(lines):
+        crit_block, prog_block = _extract_from_zone_table(lines, status)
+    else:
+        crit_block, prog_block = _extract_ua_sections(lines)
+
+    # Salvage: if critical is empty but we have issue-like lines (only for non-green)
+    if high_fidelity and not crit_block and status != STATUS_GREEN:
+        salvage = []
+        for l in lines:
+            cl = _clean_line(l)
+            n = _normalize_header(cl)
+            if _is_noise_line(cl) or _is_section_noise(cl, n):
+                continue
+            if any(k in cl.lower() for k in ISSUE_KEYWORDS) and len(cl) >= 15:
+                salvage.append(re.sub(r"^[-•]\s*", "", cl))
         crit_block = _compact_lines(salvage, max_items=8)
 
-    # If progress is weak, salvage likely progress/action lines globally.
+    # Salvage: if progress is empty but we have progress-like lines
     if high_fidelity and not prog_block:
-        salvage = [l for l in lines if any(k in l.lower() for k in PROGRESS_KEYWORDS) and not _is_noise_line(l)]
+        salvage = []
+        for l in lines:
+            cl = _clean_line(l)
+            n = _normalize_header(cl)
+            if _is_noise_line(cl) or _is_section_noise(cl, n):
+                continue
+            if any(k in cl.lower() for k in PROGRESS_KEYWORDS) and len(cl) >= 10:
+                salvage.append(re.sub(r"^[-•]\s*", "", cl))
         prog_block = _compact_lines(salvage, max_items=8)
 
     return AircraftReport(
         file_name=file_name,
         regn=regn,
-        bay=_extract_first([r"\bBay[:\s]+([A-Z0-9]+)\b", r"\bLocation[:\s]+Bay\s*([A-Z0-9]+)\b"], raw),
-        customer=_extract_first([r"Customer[:\s]+([A-Za-z0-9 /&\-\(\)]+)"], raw),
-        ac_type=_extract_first([r"Type[:\s]+([A-Za-z0-9\-]+)", r"A/C\s*Type[:\s]+([A-Za-z0-9\-]+)"], raw),
-        check_type=_extract_first([r"Check\s*Type[:\s]+([A-Za-z0-9+\/\-\s\(\)]+)"], raw),
+        bay=bay,
+        customer=customer,
+        ac_type=ac_type,
+        check_type=check_type,
         status=status,
-        ata=_extract_first([r"\bATA[:\s]+([0-9: /A-Za-z\-\(\)]+)"], raw),
-        etc=_extract_first([r"\bETC[:\s]+([0-9: /A-Za-z\-\(\)\+]+)"], raw),
-        etd=_extract_first([r"\bETD[:\s]+([0-9: /A-Za-z\-\(\)\+]+)"], raw),
-        day=_extract_first([r"\bDay[:\s]+([0-9 ]+of[ 0-9]+)"], raw),
-        insp_maint=_extract_first([r"\bINSP\s*/\s*MAINT[:\s]+([0-9% /]+)"], raw),
+        ata=ata_val,
+        etc=etc_val,
+        etd=etd_val,
+        day=day_val,
+        insp_maint="-",
         reason=_compact_lines(reason_block),
         critical_issues=_compact_lines(crit_block),
         progress_highlights=_compact_lines(prog_block),
     )
 
 
+# ---------------------------------------------------------------------------
+# Quality & normalization
+# ---------------------------------------------------------------------------
+
+def _report_quality_score(r: AircraftReport) -> int:
+    score = 0
+    if _is_valid_regn(r.regn):
+        score += 4
+    if r.bay != "-":
+        score += 3
+    if r.status != "Unknown":
+        score += 2
+    if r.etc != "-":
+        score += 1
+    if r.etd != "-":
+        score += 1
+    score += min(len(r.critical_issues), 6)
+    score += min(len(r.progress_highlights), 6)
+    bad_tokens = ("dayata", "keyword holding", "cancel %completed")
+    for x in r.critical_issues + r.progress_highlights:
+        if any(t in x.lower() for t in bad_tokens):
+            score -= 2
+    return score
+
+
+def _normalize_reports(reports: list[AircraftReport]) -> list[AircraftReport]:
+    filtered: list[AircraftReport] = []
+    for r in reports:
+        if not _is_valid_regn(r.regn):
+            continue
+        crit_set = {x.lower() for x in r.critical_issues}
+        r.progress_highlights = [p for p in r.progress_highlights if p.lower() not in crit_set]
+        filtered.append(r)
+
+    best_by_regn: dict[str, AircraftReport] = {}
+    for r in filtered:
+        key = r.regn.upper()
+        if key not in best_by_regn:
+            best_by_regn[key] = r
+            continue
+        if _report_quality_score(r) > _report_quality_score(best_by_regn[key]):
+            best_by_regn[key] = r
+
+    result = list(best_by_regn.values())
+    result.sort(key=lambda x: (x.bay == "-", x.bay, x.regn))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Rendering helpers
+# ---------------------------------------------------------------------------
+
 def _issue_tag(line: str) -> str:
     l = line.lower()
-    if any(k in l for k in ["aog", "waiting", "pending", "blocked", "shortage", "fault", "crack"]):
+    if any(k in l for k in ["aog", "waiting", "pending", "blocked", "shortage", "fault", "crack", "broken"]):
         return "BLOCKING"
     if any(k in l for k in ["wip", "monitor", "inspection", "rectification"]):
         return "MONITOR"
@@ -402,6 +874,20 @@ def _show_data_quality_hints(items: list[AircraftReport]) -> None:
             hints.append(f"Missing critical/progress sections on: {', '.join(missing_sections[:6])}")
         st.warning("Data quality checks: " + " | ".join(hints))
 
+
+def _load_config() -> dict:
+    path = Path(__file__).with_name("ui_output_config.json")
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return DEFAULT_CONFIG
+    return DEFAULT_CONFIG
+
+
+# ---------------------------------------------------------------------------
+# Report rendering
+# ---------------------------------------------------------------------------
 
 def render_text_report(
     items: list[AircraftReport], report_date: str, tone: str, format_style: str, config: dict
@@ -526,6 +1012,10 @@ def render_html_report(
 </html>"""
 
 
+# ---------------------------------------------------------------------------
+# Processing
+# ---------------------------------------------------------------------------
+
 def process_uploaded_files(files: list, high_fidelity: bool = True) -> list[AircraftReport]:
     reports: list[AircraftReport] = []
     for f in files:
@@ -533,7 +1023,7 @@ def process_uploaded_files(files: list, high_fidelity: bool = True) -> list[Airc
             reports.append(parse_pdf_file(f.name, f.getvalue(), high_fidelity=high_fidelity))
         except Exception as exc:
             st.warning(f"Failed to parse {f.name}: {exc}")
-    return reports
+    return _normalize_reports(reports)
 
 
 def process_folder(folder_path: str, high_fidelity: bool = True) -> tuple[list[AircraftReport], list[str]]:
@@ -547,8 +1037,12 @@ def process_folder(folder_path: str, high_fidelity: bool = True) -> tuple[list[A
             reports.append(parse_pdf_file(p.name, p.read_bytes(), high_fidelity=high_fidelity))
         except Exception as exc:
             st.warning(f"Failed to parse {p.name}: {exc}")
-    return reports, [str(x) for x in pdf_files]
+    return _normalize_reports(reports), [str(x) for x in pdf_files]
 
+
+# ---------------------------------------------------------------------------
+# Streamlit UI
+# ---------------------------------------------------------------------------
 
 def _apply_streamlit_theme(accent: str, panel: str, bg: str) -> None:
     st.markdown(
