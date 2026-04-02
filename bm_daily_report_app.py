@@ -850,22 +850,45 @@ def _normalize_reports(reports: list[AircraftReport]) -> list[AircraftReport]:
 # Rendering helpers
 # ---------------------------------------------------------------------------
 
+_TAG_BLOCKING = "BLOCKING"
+_TAG_MONITOR = "MONITORING"
+_TAG_INFO = "INFO"
+
+_TAG_DISPLAY = {
+    _TAG_BLOCKING: {"text": "BLOCKING", "color": "#ff6b6b", "bg": "rgba(255,107,107,0.15)"},
+    _TAG_MONITOR: {"text": "MONITORING", "color": "#f1c40f", "bg": "rgba(241,196,15,0.15)"},
+    _TAG_INFO: {"text": "INFO", "color": "#57c8b3", "bg": "rgba(87,200,179,0.15)"},
+}
+
+
 def _issue_tag(line: str) -> str:
     l = line.lower()
-    if any(k in l for k in ["aog", "waiting", "pending", "blocked", "shortage", "fault", "crack", "broken"]):
-        return "BLOCKING"
-    if any(k in l for k in ["wip", "monitor", "inspection", "rectification"]):
-        return "MONITOR"
-    return "INFO"
+    if any(k in l for k in ["aog", "waiting", "pending", "blocked", "shortage", "fault", "crack", "broken", "hold up", "held up"]):
+        return _TAG_BLOCKING
+    if any(k in l for k in ["wip", "monitor", "inspection", "rectification", "repair", "delamina", "erosi", "corrosion", "insp", "mod ", "replace"]):
+        return _TAG_MONITOR
+    return _TAG_INFO
+
+
+def _issue_tag_html(line: str) -> str:
+    tag = _issue_tag(line)
+    style = _TAG_DISPLAY[tag]
+    return (
+        f'<span style="display:inline-block;padding:1px 8px;border-radius:4px;'
+        f'font-size:11px;font-weight:700;letter-spacing:0.5px;'
+        f'color:{style["color"]};background:{style["bg"]};'
+        f'border:1px solid {style["color"]};">{style["text"]}</span>'
+    )
 
 
 def _tone_line(issue_prefix: str, tone: str, issue: str) -> str:
     tag = _issue_tag(issue)
+    label = _TAG_DISPLAY[tag]["text"]
     if tone == "Executive":
-        return f"- [{tag}] {issue_prefix}: {issue}"
+        return f"- [{label}] {issue_prefix}: {issue}"
     if tone == "Action-Oriented":
-        return f"- [{tag}] {issue} | Next: follow-up and close"
-    return f"- [{tag}] {issue}"
+        return f"- [{label}] {issue} | Next: follow-up and close"
+    return f"- [{label}] {issue}"
 
 
 def _summary(items: list[AircraftReport]) -> tuple[int, int, int]:
@@ -923,12 +946,12 @@ def render_text_report(
         blockers = []
         for i in sorted(items, key=lambda x: x.bay):
             for issue in i.critical_issues:
-                if _issue_tag(issue) == "BLOCKING":
+                if _issue_tag(issue) == _TAG_BLOCKING:
                     blockers.append((i.bay, i.regn, issue))
-        lines += ["TOP BLOCKERS", "------------------------------------------------------------"]
+        lines += ["TOP BLOCKING ITEMS", "------------------------------------------------------------"]
         if blockers:
             for bay, regn, issue in blockers[:10]:
-                lines.append(f"- Bay {bay} | {regn}: {issue}")
+                lines.append(f"- [BLOCKING] Bay {bay} | {regn}: {issue}")
         else:
             lines.append("- No blockers identified.")
         lines.append("")
@@ -975,7 +998,7 @@ def render_html_report(
     for i in sorted(items, key=lambda x: x.bay):
         reason_html = "".join(f"<li>{html.escape(r)}</li>" for r in i.reason[:max_reason]) or "<li>(none)</li>"
         crit_html = "".join(
-            f"<li><strong>[{_issue_tag(c)}]</strong> {html.escape(c)}</li>" for c in i.critical_issues[:max_critical]
+            f"<li>{_issue_tag_html(c)} {html.escape(c)}</li>" for c in i.critical_issues[:max_critical]
         ) or "<li>(none)</li>"
         prog_html = (
             "".join(f"<li>{html.escape(p)}</li>" for p in i.progress_highlights[:max_progress]) or "<li>(none)</li>"
@@ -1009,6 +1032,7 @@ def render_html_report(
     .cols {{ display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; }}
     h3 {{ margin:0 0 6px 0; color:#fff; }} p {{ margin:4px 0; color:#fff; }} h4 {{ color:#fff; }}
     ul {{ margin:6px 0 0 18px; color:#fff; }}
+    li {{ margin-bottom:4px; line-height:1.5; }}
     [contenteditable="true"] {{ outline: 1px dashed transparent; border-radius:4px; }}
     [contenteditable="true"]:hover {{ outline-color:#57c8b3; }}
     [contenteditable="true"]:focus {{ outline:2px solid #1cd6b4; background:#123c45; }}
