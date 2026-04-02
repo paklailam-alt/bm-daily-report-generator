@@ -344,6 +344,18 @@ def _extract_bay(raw: str, lines: list[str]) -> str:
                     return m2.group(1).upper()
             break
 
+    # AA/heavily-scrambled format: "Bay :" embedded mid-line with no value,
+    # bay letter sits alone near the top of extracted text (e.g. line 1 = "K")
+    if re.search(r"Bay\s*:\s*(?:Planning|$)", raw, re.IGNORECASE | re.MULTILINE):
+        for j in range(min(10, len(lines))):
+            cl = _clean_line(lines[j])
+            if re.fullmatch(r"[A-Z]", cl, re.IGNORECASE):
+                return cl.upper()
+            if re.fullmatch(r"[A-Z]\d{1,4}", cl, re.IGNORECASE):
+                return cl.upper()
+            if re.fullmatch(r"\d{1,2}", cl):
+                return cl
+
     # Body-text mention: "TOW AIRCRAFT TO M21"
     m = re.search(r"TOW\s+(?:AIRCRAFT\s+)?TO\s+(M\d+|BAY\s*[A-Z0-9]+)", raw, re.IGNORECASE)
     if m:
@@ -1104,36 +1116,34 @@ def _apply_streamlit_theme(accent: str, panel: str, bg: str) -> None:
             background: #20e7c4 !important;
             color: #012028 !important;
           }}
-          [data-testid="stFileUploaderFile"] {{
+          [data-testid="stFileUploaderFile"],
+          [data-testid="stFileUploaderFile"] > div,
+          [data-testid="stFileUploaderFile"] > div > div {{
             background: rgba(14, 47, 54, 0.95) !important;
             border: 1px solid rgba(28, 214, 180, 0.35) !important;
             border-radius: 10px !important;
+            color: #ffffff !important;
           }}
-          [data-testid="stFileUploader"] section [data-testid="stFileUploaderFile"] {{
-            background: rgba(14, 47, 54, 0.98) !important;
-          }}
-          [data-testid="stFileUploader"] section {{
-            background: transparent !important;
-          }}
-          [data-testid="stFileUploader"] section > div {{
-            background: transparent !important;
-          }}
+          [data-testid="stFileUploader"] section,
+          [data-testid="stFileUploader"] section > div,
+          [data-testid="stFileUploader"] section > div > div,
+          [data-testid="stFileUploaderFileData"],
+          [data-testid="stFileUploader"] section [data-testid="stFileUploaderFile"],
           [data-testid="stFileUploader"] section [data-testid="stFileUploaderFileData"] {{
             background: transparent !important;
-          }}
-          [data-testid="stFileUploaderFile"] * {{
             color: #ffffff !important;
           }}
-          [data-testid="stFileUploaderFileName"] {{
-            color: #ffffff !important;
-            font-weight: 600 !important;
-          }}
-          [data-testid="stFileUploader"] section [data-testid="stFileUploaderFileName"],
-          [data-testid="stFileUploader"] section [data-testid="stFileUploaderFileName"] span,
-          [data-testid="stFileUploader"] section [data-testid="stFileUploaderFileData"] div,
-          [data-testid="stFileUploader"] section [data-testid="stFileUploaderFileData"] span {{
+          [data-testid="stFileUploaderFile"] *,
+          [data-testid="stFileUploaderFileName"],
+          [data-testid="stFileUploaderFileName"] *,
+          [data-testid="stFileUploaderFileData"] *,
+          [data-testid="stFileUploader"] small,
+          [data-testid="stFileUploader"] span {{
             color: #ffffff !important;
             background: transparent !important;
+          }}
+          [data-testid="stFileUploaderFileName"] {{
+            font-weight: 600 !important;
           }}
           [data-testid="stFileUploaderDeleteBtn"] {{
             background: #17424a !important;
@@ -1144,6 +1154,9 @@ def _apply_streamlit_theme(accent: str, panel: str, bg: str) -> None:
           [data-testid="stFileUploaderDeleteBtn"]:hover {{
             background: #1f5a64 !important;
             color: #ffffff !important;
+          }}
+          [data-testid="stFileUploaderDeleteBtn"] svg {{
+            fill: #ffffff !important;
           }}
           .stRadio > div, .stCheckbox > label {{
             color: #ffffff !important;
@@ -1237,7 +1250,7 @@ def render_outputs(
         else:
             st.warning(f"Output folder does not exist: {out_path}")
 
-    st.text_area("Text Preview", txt, height=380)
+    st.text_area("Text Preview", txt, height=380, key=f"text_preview_{key_prefix}")
     st.components.v1.html(html_out, height=680, scrolling=True)
 
 
@@ -1290,6 +1303,15 @@ def app() -> None:
             st.info("Upload one or more PDFs to generate the report.")
         else:
             st.success(f"{len(files)} file(s) ready.")
+            with st.expander(f"Uploaded Files ({len(files)})", expanded=True):
+                for f in files:
+                    st.markdown(
+                        f'<div style="padding:4px 10px;margin:2px 0;'
+                        f'background:rgba(14,47,54,0.95);border:1px solid rgba(28,214,180,0.3);'
+                        f'border-radius:6px;color:#ffffff;font-size:14px;">'
+                        f'📄 {f.name}</div>',
+                        unsafe_allow_html=True,
+                    )
             generate_uploaded = st.button("Generate Report from Uploaded Files")
             if generate_uploaded:
                 reports = process_uploaded_files(files, high_fidelity=high_fidelity)
