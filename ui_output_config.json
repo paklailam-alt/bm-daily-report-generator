@@ -1,0 +1,35 @@
+{
+  "themes": {
+    "haeco_dark": {
+      "accent": "#1cd6b4",
+      "panel": "#0b2930",
+      "bg": "#041f25"
+    }
+  },
+  "tone_presets": {
+    "Executive": {
+      "title_suffix": "Executive Snapshot",
+      "issue_prefix": "Mgmt Alert"
+    },
+    "Engineering": {
+      "title_suffix": "Engineering Detail",
+      "issue_prefix": "Technical Issue"
+    },
+    "Action-Oriented": {
+      "title_suffix": "Action Board",
+      "issue_prefix": "Action Required"
+    }
+  },
+  "format_presets": {
+    "Detailed": {
+      "max_reason": 4,
+      "max_critical": 6,
+      "max_progress": 6
+    },
+    "Management Snapshot": {
+      "max_reason": 2,
+      "max_critical": 3,
+      "max_progress": 3
+    }
+  }
+}

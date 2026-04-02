@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import io
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -15,6 +16,19 @@ from pypdf import PdfReader
 STATUS_GREEN = "On Schedule"
 STATUS_AMBER = "Potential Delay"
 STATUS_RED = "Delay"
+
+DEFAULT_CONFIG = {
+    "themes": {"haeco_dark": {"accent": "#1cd6b4", "panel": "#0b2930", "bg": "#041f25"}},
+    "tone_presets": {
+        "Executive": {"title_suffix": "Executive Snapshot", "issue_prefix": "Mgmt Alert"},
+        "Engineering": {"title_suffix": "Engineering Detail", "issue_prefix": "Technical Issue"},
+        "Action-Oriented": {"title_suffix": "Action Board", "issue_prefix": "Action Required"},
+    },
+    "format_presets": {
+        "Detailed": {"max_reason": 4, "max_critical": 6, "max_progress": 6},
+        "Management Snapshot": {"max_reason": 2, "max_critical": 3, "max_progress": 3},
+    },
+}
 
 
 @dataclass
@@ -49,8 +63,7 @@ class AircraftReport:
 
 def _clean_line(line: str) -> str:
     line = line.replace("\u2022", "-").replace("\u25cf", "-").strip()
-    line = re.sub(r"\s+", " ", line)
-    return line
+    return re.sub(r"\s+", " ", line)
 
 
 def _non_empty_lines(text: str) -> list[str]:
@@ -75,14 +88,8 @@ def _extract_block(start_re: str, end_res: list[str], text: str) -> list[str]:
         m = re.search(end_re, sub, re.IGNORECASE)
         if m:
             end_pos = min(end_pos, m.start())
-    block = sub[:end_pos]
-    lines = _non_empty_lines(block)
-    cleaned: list[str] = []
-    for line in lines:
-        line = re.sub(r"^[-:]\s*", "", line)
-        if line:
-            cleaned.append(line)
-    return cleaned
+    lines = _non_empty_lines(sub[:end_pos])
+    return [re.sub(r"^[-:]\s*", "", line) for line in lines if line]
 
 
 def _guess_regn_from_filename(file_name: str) -> str:
@@ -92,21 +99,26 @@ def _guess_regn_from_filename(file_name: str) -> str:
     return token.upper() if token else "UNKNOWN"
 
 
+def _load_config() -> dict:
+    path = Path(__file__).with_name("ui_output_config.json")
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return DEFAULT_CONFIG
+    return DEFAULT_CONFIG
+
+
 def parse_pdf_file(file_name: str, file_bytes: bytes) -> AircraftReport:
     reader = PdfReader(io.BytesIO(file_bytes))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
-    lines = _non_empty_lines(text)
-    raw = "\n".join(lines)
+    raw = "\n".join(_non_empty_lines(text))
 
     regn = _extract_first(
-        [
-            r"A/C\s*Regn[:\s]+([A-Z0-9\-]+)",
-            r"Aircraft\s*Regn[:\s]+([A-Z0-9\-]+)",
-        ],
+        [r"A/C\s*Regn[:\s]+([A-Z0-9\-]+)", r"Aircraft\s*Regn[:\s]+([A-Z0-9\-]+)"],
         raw,
         _guess_regn_from_filename(file_name),
     )
-
     status = _extract_first(
         [r"A/C\s*Overall\s*Status[:\s]+([A-Za-z ]+)", r"Overall\s*Status[:\s]+([A-Za-z ]+)"],
         raw,
@@ -119,43 +131,26 @@ def parse_pdf_file(file_name: str, file_bytes: bytes) -> AircraftReport:
     elif re.search(r"\bdelay\b", status, re.IGNORECASE):
         status = STATUS_RED
 
-    bay = _extract_first([r"\bBay[:\s]+([A-Z0-9]+)\b", r"\bLocation[:\s]+Bay\s*([A-Z0-9]+)\b"], raw)
-    customer = _extract_first([r"Customer[:\s]+([A-Za-z0-9 /&\-\(\)]+)"], raw)
-    ac_type = _extract_first([r"Type[:\s]+([A-Za-z0-9\-]+)", r"A/C\s*Type[:\s]+([A-Za-z0-9\-]+)"], raw)
-    check_type = _extract_first([r"Check\s*Type[:\s]+([A-Za-z0-9+\/\-\s\(\)]+)"], raw)
-
-    ata = _extract_first([r"\bATA[:\s]+([0-9: /A-Za-z\-\(\)]+)"], raw)
-    etc = _extract_first([r"\bETC[:\s]+([0-9: /A-Za-z\-\(\)\+]+)"], raw)
-    etd = _extract_first([r"\bETD[:\s]+([0-9: /A-Za-z\-\(\)\+]+)"], raw)
-    day = _extract_first([r"\bDay[:\s]+([0-9 ]+of[ 0-9]+)"], raw)
-    insp_maint = _extract_first([r"\bINSP\s*/\s*MAINT[:\s]+([0-9% /]+)"], raw)
-
-    reason = _extract_block(r"Reason", [r"Critical Task", r"Progress Highlights", r"RTC", r"Remarks"], raw)
-    crit = _extract_block(r"Critical\s*Task\s*/\s*Issue", [r"Progress Highlights", r"RTC", r"Remarks"], raw)
-    prog = _extract_block(r"Progress Highlights", [r"RTC", r"Remarks"], raw)
-
-    # Fallbacks for reports with inconsistent headings.
-    if not crit:
-        crit = _extract_block(r"Critical\s*Issue", [r"Progress", r"RTC", r"Remarks"], raw)
-    if not prog:
-        prog = _extract_block(r"Work Done", [r"RTC", r"Remarks"], raw)
-
     return AircraftReport(
         file_name=file_name,
         regn=regn,
-        bay=bay,
-        customer=customer,
-        ac_type=ac_type,
-        check_type=check_type,
+        bay=_extract_first([r"\bBay[:\s]+([A-Z0-9]+)\b", r"\bLocation[:\s]+Bay\s*([A-Z0-9]+)\b"], raw),
+        customer=_extract_first([r"Customer[:\s]+([A-Za-z0-9 /&\-\(\)]+)"], raw),
+        ac_type=_extract_first([r"Type[:\s]+([A-Za-z0-9\-]+)", r"A/C\s*Type[:\s]+([A-Za-z0-9\-]+)"], raw),
+        check_type=_extract_first([r"Check\s*Type[:\s]+([A-Za-z0-9+\/\-\s\(\)]+)"], raw),
         status=status,
-        ata=ata,
-        etc=etc,
-        etd=etd,
-        day=day,
-        insp_maint=insp_maint,
-        reason=reason,
-        critical_issues=crit,
-        progress_highlights=prog,
+        ata=_extract_first([r"\bATA[:\s]+([0-9: /A-Za-z\-\(\)]+)"], raw),
+        etc=_extract_first([r"\bETC[:\s]+([0-9: /A-Za-z\-\(\)\+]+)"], raw),
+        etd=_extract_first([r"\bETD[:\s]+([0-9: /A-Za-z\-\(\)\+]+)"], raw),
+        day=_extract_first([r"\bDay[:\s]+([0-9 ]+of[ 0-9]+)"], raw),
+        insp_maint=_extract_first([r"\bINSP\s*/\s*MAINT[:\s]+([0-9% /]+)"], raw),
+        reason=_extract_block(r"Reason", [r"Critical Task", r"Progress Highlights", r"RTC", r"Remarks"], raw),
+        critical_issues=_extract_block(
+            r"Critical\s*Task\s*/\s*Issue", [r"Progress Highlights", r"RTC", r"Remarks"], raw
+        )
+        or _extract_block(r"Critical\s*Issue", [r"Progress", r"RTC", r"Remarks"], raw),
+        progress_highlights=_extract_block(r"Progress Highlights", [r"RTC", r"Remarks"], raw)
+        or _extract_block(r"Work Done", [r"RTC", r"Remarks"], raw),
     )
 
 
@@ -168,62 +163,101 @@ def _issue_tag(line: str) -> str:
     return "INFO"
 
 
-def render_text_report(items: list[AircraftReport], report_date: str) -> str:
+def _tone_line(issue_prefix: str, tone: str, issue: str) -> str:
+    tag = _issue_tag(issue)
+    if tone == "Executive":
+        return f"- [{tag}] {issue_prefix}: {issue}"
+    if tone == "Action-Oriented":
+        return f"- [{tag}] {issue} | Next: follow-up and close"
+    return f"- [{tag}] {issue}"
+
+
+def _summary(items: list[AircraftReport]) -> tuple[int, int, int]:
     green = sum(i.status_class == "green" for i in items)
     amber = sum(i.status_class == "amber" for i in items)
     red = sum(i.status_class == "red" for i in items)
-    delivered = [i for i in items if "complete" in i.status.lower() or i.etd != "-"]
-    active = len(items) - 0
+    return green, amber, red
 
-    lines: list[str] = []
-    lines += [
-        "BM DAILY AIRCRAFT PROGRESS REPORT",
+
+def render_text_report(
+    items: list[AircraftReport], report_date: str, tone: str, format_style: str, config: dict
+) -> str:
+    format_cfg = config["format_presets"][format_style]
+    tone_cfg = config["tone_presets"][tone]
+    max_reason = format_cfg["max_reason"]
+    max_critical = format_cfg["max_critical"]
+    max_progress = format_cfg["max_progress"]
+    green, amber, red = _summary(items)
+
+    lines: list[str] = [
+        f"BM DAILY AIRCRAFT PROGRESS REPORT - {tone_cfg['title_suffix']}",
         f"Report Date: {report_date}",
         "",
         f"Total A/Cs: {len(items)} | Green: {green} | Amber: {amber} | Red: {red}",
-        f"BM Active Maintenance: {active}",
-        "",
-        "MAINTENANCE IN PROGRESS",
         "============================================================",
     ]
+
+    if format_style == "Management Snapshot":
+        blockers = []
+        for i in sorted(items, key=lambda x: x.bay):
+            for issue in i.critical_issues:
+                if _issue_tag(issue) == "BLOCKING":
+                    blockers.append((i.bay, i.regn, issue))
+        lines += ["TOP BLOCKERS", "------------------------------------------------------------"]
+        if blockers:
+            for bay, regn, issue in blockers[:10]:
+                lines.append(f"- Bay {bay} | {regn}: {issue}")
+        else:
+            lines.append("- No blockers identified.")
+        lines.append("")
+
+    lines += ["MAINTENANCE IN PROGRESS", "============================================================"]
     for i in sorted(items, key=lambda x: x.bay):
         lines.append(f"Bay {i.bay} - {i.regn} ({i.customer} / {i.ac_type}) {i.check_type} | {i.status}")
         lines.append(f"ATA: {i.ata} | ETC: {i.etc}" + (f" | ETD: {i.etd}" if i.etd != "-" else ""))
+
         if i.reason:
             lines.append("Reason:")
-            for r in i.reason[:4]:
+            for r in i.reason[:max_reason]:
                 lines.append(f"- {r}")
+
         lines.append("Critical Task / Issue:")
         if i.critical_issues:
-            for c in i.critical_issues[:6]:
-                lines.append(f"- [{_issue_tag(c)}] {c}")
+            for c in i.critical_issues[:max_critical]:
+                lines.append(_tone_line(tone_cfg["issue_prefix"], tone, c))
         else:
             lines.append("- (none)")
+
         lines.append("Progress Highlights:")
         if i.progress_highlights:
-            for p in i.progress_highlights[:6]:
+            for p in i.progress_highlights[:max_progress]:
                 lines.append(f"- {p}")
         else:
             lines.append("- (none)")
         lines.append("")
-    if delivered:
-        lines.append("Delivered / ETD Set:")
-        for i in delivered:
-            lines.append(f"- {i.regn} (Bay {i.bay}) ETD: {i.etd}")
+
     return "\n".join(lines)
 
 
-def render_html_report(items: list[AircraftReport], report_date: str) -> str:
-    green = sum(i.status_class == "green" for i in items)
-    amber = sum(i.status_class == "amber" for i in items)
-    red = sum(i.status_class == "red" for i in items)
+def render_html_report(
+    items: list[AircraftReport], report_date: str, tone: str, format_style: str, config: dict
+) -> str:
+    format_cfg = config["format_presets"][format_style]
+    tone_cfg = config["tone_presets"][tone]
+    max_reason = format_cfg["max_reason"]
+    max_critical = format_cfg["max_critical"]
+    max_progress = format_cfg["max_progress"]
+    green, amber, red = _summary(items)
+
     cards = []
     for i in sorted(items, key=lambda x: x.bay):
-        reason_html = "".join(f"<li>{html.escape(r)}</li>" for r in i.reason[:4]) or "<li>(none)</li>"
+        reason_html = "".join(f"<li>{html.escape(r)}</li>" for r in i.reason[:max_reason]) or "<li>(none)</li>"
         crit_html = "".join(
-            f"<li><strong>[{_issue_tag(c)}]</strong> {html.escape(c)}</li>" for c in i.critical_issues[:6]
+            f"<li><strong>[{_issue_tag(c)}]</strong> {html.escape(c)}</li>" for c in i.critical_issues[:max_critical]
         ) or "<li>(none)</li>"
-        prog_html = "".join(f"<li>{html.escape(p)}</li>" for p in i.progress_highlights[:6]) or "<li>(none)</li>"
+        prog_html = (
+            "".join(f"<li>{html.escape(p)}</li>" for p in i.progress_highlights[:max_progress]) or "<li>(none)</li>"
+        )
         cards.append(
             f"""
             <div class="card {i.status_class}">
@@ -232,7 +266,7 @@ def render_html_report(items: list[AircraftReport], report_date: str) -> str:
               <p contenteditable="true"><strong>ATA:</strong> {html.escape(i.ata)} | <strong>ETC:</strong> {html.escape(i.etc)} | <strong>ETD:</strong> {html.escape(i.etd)}</p>
               <div class="cols">
                 <div><h4 contenteditable="true">Reason</h4><ul contenteditable="true">{reason_html}</ul></div>
-                <div><h4 contenteditable="true">Critical Task / Issue</h4><ul contenteditable="true">{crit_html}</ul></div>
+                <div><h4 contenteditable="true">{html.escape(tone_cfg["issue_prefix"])}</h4><ul contenteditable="true">{crit_html}</ul></div>
                 <div><h4 contenteditable="true">Progress Highlights</h4><ul contenteditable="true">{prog_html}</ul></div>
               </div>
             </div>
@@ -245,22 +279,23 @@ def render_html_report(items: list[AircraftReport], report_date: str) -> str:
   <meta charset="utf-8"/>
   <title>BM Daily Report - {html.escape(report_date)}</title>
   <style>
-    body {{ font-family: Arial, sans-serif; margin: 20px; background: #f4f6f8; }}
-    .header {{ background:#102a43; color:#fff; padding:16px; border-radius:10px; }}
-    .stats {{ margin-top:8px; font-size:14px; }}
-    .card {{ background:#fff; border-radius:10px; padding:14px; margin:12px 0; border-left:6px solid #999; }}
-    .green {{ border-color:#28a745; }} .amber {{ border-color:#f0ad4e; }} .red {{ border-color:#d9534f; }}
+    body {{ font-family: Arial, sans-serif; margin: 20px; background: #061f25; color:#dbe7ea; }}
+    .header {{ background: linear-gradient(120deg, #05232a 0%, #0b3740 70%); color:#fff; padding:16px; border-radius:12px; }}
+    .stats {{ margin-top:8px; font-size:14px; color:#bde7dd; }}
+    .card {{ background:#0e2f36; border-radius:10px; padding:14px; margin:12px 0; border-left:6px solid #4f5b66; }}
+    .green {{ border-color:#2ecc71; }} .amber {{ border-color:#f1c40f; }} .red {{ border-color:#ff6b6b; }}
     .cols {{ display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; }}
-    h3 {{ margin:0 0 6px 0; }} p {{ margin:4px 0; }} ul {{ margin:6px 0 0 18px; }}
+    h3 {{ margin:0 0 6px 0; color:#ecf6f9; }} p {{ margin:4px 0; color:#cbe2e8; }} h4 {{ color:#7fffd4; }}
+    ul {{ margin:6px 0 0 18px; color:#dce7ea; }}
     [contenteditable="true"] {{ outline: 1px dashed transparent; border-radius:4px; }}
-    [contenteditable="true"]:hover {{ outline-color:#6aa0d8; }}
-    [contenteditable="true"]:focus {{ outline:2px solid #3f83c4; background:#eef7ff; }}
+    [contenteditable="true"]:hover {{ outline-color:#57c8b3; }}
+    [contenteditable="true"]:focus {{ outline:2px solid #1cd6b4; background:#123c45; }}
   </style>
 </head>
 <body>
   <div class="header">
-    <h1 contenteditable="true">BM Daily Aircraft Progress Report</h1>
-    <div class="stats" contenteditable="true">Date: {html.escape(report_date)} | Total: {len(items)} | Green: {green} | Amber: {amber} | Red: {red}</div>
+    <h1 contenteditable="true">BM Daily Aircraft Progress Report - {html.escape(tone_cfg["title_suffix"])}</h1>
+    <div class="stats" contenteditable="true">Date: {html.escape(report_date)} | Format: {html.escape(format_style)} | Total: {len(items)} | Green: {green} | Amber: {amber} | Red: {red}</div>
   </div>
   {"".join(cards)}
 </body>
@@ -291,9 +326,56 @@ def process_folder(folder_path: str) -> tuple[list[AircraftReport], list[str]]:
     return reports, [str(x) for x in pdf_files]
 
 
-def render_outputs(reports: list[AircraftReport], report_date: str, output_dir: str | None = None) -> None:
-    txt = render_text_report(reports, report_date)
-    html_out = render_html_report(reports, report_date)
+def _apply_streamlit_theme(accent: str, panel: str, bg: str) -> None:
+    st.markdown(
+        f"""
+        <style>
+          .stApp {{
+            background: radial-gradient(circle at 10% 10%, #0c3a42 0%, {bg} 45%, #02171b 100%);
+            color: #dff4f6;
+          }}
+          [data-testid="stSidebar"] {{
+            background: linear-gradient(180deg, #061f25 0%, {panel} 100%);
+          }}
+          .stButton > button {{
+            background: {accent}; color: #012028; border: 0; font-weight: 700;
+          }}
+          .metric-card {{
+            background: rgba(17, 61, 70, 0.72);
+            border: 1px solid rgba(28, 214, 180, 0.28);
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+          }}
+          .right-panel {{
+            background: rgba(7, 40, 46, 0.85);
+            border: 1px solid rgba(122, 243, 222, 0.2);
+            border-radius: 14px;
+            padding: 14px;
+          }}
+          .visit-item {{
+            background: rgba(10, 63, 74, 0.65);
+            border-radius: 10px;
+            padding: 10px;
+            margin-bottom: 8px;
+            border: 1px solid rgba(28, 214, 180, 0.12);
+          }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_outputs(
+    reports: list[AircraftReport],
+    report_date: str,
+    tone: str,
+    format_style: str,
+    config: dict,
+    output_dir: str | None = None,
+) -> None:
+    txt = render_text_report(reports, report_date, tone, format_style, config)
+    html_out = render_html_report(reports, report_date, tone, format_style, config)
     safe_date = report_date.replace("/", "-").replace(" ", "_")
     txt_name = f"BM_Daily_Report_{safe_date}.txt"
     html_name = f"BM_Daily_Report_{safe_date}.html"
@@ -313,17 +395,40 @@ def render_outputs(reports: list[AircraftReport], report_date: str, output_dir: 
         else:
             st.warning(f"Output folder does not exist: {out_path}")
 
-    st.text_area("Text Preview", txt, height=420)
-    st.components.v1.html(html_out, height=700, scrolling=True)
+    st.text_area("Text Preview", txt, height=380)
+    st.components.v1.html(html_out, height=680, scrolling=True)
 
 
 def app() -> None:
     st.set_page_config(page_title="BM Daily Report Generator", layout="wide")
-    st.title("BM Daily Report Generator")
-    st.caption("Upload daily aircraft PDFs and generate management-ready text + HTML summaries.")
+    config = _load_config()
+    theme = config["themes"]["haeco_dark"]
+    _apply_streamlit_theme(theme["accent"], theme["panel"], theme["bg"])
 
-    report_date = st.text_input("Report Date", value=datetime.now().strftime("%d %b %Y"))
-    mode = st.radio("Input Mode", ["Upload PDFs", "Watch Folder"], horizontal=True)
+    st.sidebar.header("Report Controls")
+    report_date = st.sidebar.text_input("Report Date", value=datetime.now().strftime("%d %b %Y"))
+    tone = st.sidebar.selectbox("Output Tone", list(config["tone_presets"].keys()), index=0)
+    format_style = st.sidebar.selectbox("Output Format", list(config["format_presets"].keys()), index=0)
+    mode = st.sidebar.radio("Input Mode", ["Upload PDFs", "Watch Folder"])
+
+    left, right = st.columns([1.7, 1.0], gap="large")
+    with left:
+        st.title("HAECO BM Daily Report Assistant")
+        st.caption("Upload or watch a daily PDF folder, then generate text + HTML summaries with selectable tone.")
+
+    with right:
+        st.markdown(
+            """
+            <div class="right-panel">
+              <h4 style="margin-top:0;color:#dffff5;">Recent Actions</h4>
+              <div class="visit-item">Analyse Workcards</div>
+              <div class="visit-item">Daily Report Generation</div>
+              <div class="visit-item">Management Snapshot Export</div>
+              <div class="visit-item">Maintenance Risk Summary</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     if mode == "Upload PDFs":
         files = st.file_uploader("Upload daily PDF files", type=["pdf"], accept_multiple_files=True)
@@ -334,7 +439,13 @@ def app() -> None:
         if not reports:
             st.error("No reports could be parsed.")
             return
-        render_outputs(reports, report_date)
+        g, a, r = _summary(reports)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.markdown(f'<div class="metric-card"><b>Total</b><br>{len(reports)}</div>', unsafe_allow_html=True)
+        c2.markdown(f'<div class="metric-card"><b>Green</b><br>{g}</div>', unsafe_allow_html=True)
+        c3.markdown(f'<div class="metric-card"><b>Amber</b><br>{a}</div>', unsafe_allow_html=True)
+        c4.markdown(f'<div class="metric-card"><b>Red</b><br>{r}</div>', unsafe_allow_html=True)
+        render_outputs(reports, report_date, tone, format_style, config)
         return
 
     default_watch = str(Path.home() / "Downloads" / "2Apr Daily Report")
@@ -345,24 +456,30 @@ def app() -> None:
 
     reports: list[AircraftReport] = []
     files_found: list[str] = []
-
     if auto_generate or run_now:
         reports, files_found = process_folder(watch_folder)
 
-    if files_found:
-        st.caption(f"Found {len(files_found)} PDF file(s) in folder.")
-        with st.expander("Show files found"):
-            for f in files_found:
-                st.text(f)
-    else:
+    if not files_found:
         st.info("No PDF files found in the selected folder yet.")
         return
+
+    st.caption(f"Found {len(files_found)} PDF file(s).")
+    with st.expander("Show files found"):
+        for f in files_found:
+            st.text(f)
 
     if not reports:
         st.error("No reports could be parsed from folder files.")
         return
 
-    render_outputs(reports, report_date, output_dir=output_folder)
+    g, a, r = _summary(reports)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(f'<div class="metric-card"><b>Total</b><br>{len(reports)}</div>', unsafe_allow_html=True)
+    c2.markdown(f'<div class="metric-card"><b>Green</b><br>{g}</div>', unsafe_allow_html=True)
+    c3.markdown(f'<div class="metric-card"><b>Amber</b><br>{a}</div>', unsafe_allow_html=True)
+    c4.markdown(f'<div class="metric-card"><b>Red</b><br>{r}</div>', unsafe_allow_html=True)
+
+    render_outputs(reports, report_date, tone, format_style, config, output_dir=output_folder)
 
 
 if __name__ == "__main__":

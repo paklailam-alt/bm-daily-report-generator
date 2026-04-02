@@ -23,6 +23,23 @@ Open in browser:
 - Text report (`.txt`)
 - HTML report (`.html`, editable fields enabled)
 
+## UI and output customization
+
+The app supports selectable output presets from the sidebar:
+
+- `Output Tone`: Executive / Engineering / Action-Oriented
+- `Output Format`: Detailed / Management Snapshot
+
+You can also customize theme and presets in:
+
+- `ui_output_config.json`
+
+Update this file to change:
+
+- brand colors and dark theme settings
+- tone labels and section wording
+- number of bullets shown per section for each format preset
+
 ## Watch Folder mode
 
 1. In the app, choose `Watch Folder`.
